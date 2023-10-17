@@ -33,6 +33,7 @@ Gptel-Extra is an extension for the Gptel ChatGPT client designed to enhance int
              :type git
              :host github)
   :after (gptel)
+  :demand t
   :config (gptel-extra-org-markdown-block-mode 1))
 #+end_src
 
