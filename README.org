@@ -1,0 +1,63 @@
+#+OPTIONS: ^:nil tags:nil num:nil
+
+* About
+
+Gptel-Extra is an extension for the Gptel ChatGPT client designed to enhance interaction experience by providing additional useful features.
+
+* Table of Contents                                       :TOC_2_gh:QUOTE:
+#+BEGIN_QUOTE
+- [[#about][About]]
+- [[#requirements][Requirements]]
+- [[#installation][Installation]]
+  - [[#with-use-package-and-straightel][With use-package and straight.el]]
+  - [[#manual-installation][Manual installation]]
+- [[#usage][Usage]]
+  - [[#m-x-gptel-extra-org-markdown-block-mode][~M-x gptel-extra-org-markdown-block-mode~:]]
+#+END_QUOTE
+
+* Requirements
+
+| Name    | Version |
+|---------+---------|
+| Emacs   |    26.1 |
+| ~gptel~ |   0.4.0 |
+
+
+* Installation
+
+** With use-package and straight.el
+#+begin_src elisp :eval no
+(use-package gptel-extra
+  :straight (gptel-extra
+             :repo "KarimAziev/gptel-extra"
+             :type git
+             :host github)
+  :after (gptel)
+  :config (gptel-extra-org-markdown-block-mode 1))
+#+end_src
+
+** Manual installation
+
+Download the source code and put it wherever you like, e.g. into =~/.emacs.d/gptel-extra/=
+
+#+begin_src shell :eval no
+git clone https://github.com/KarimAziev/gptel-extra.git ~/.emacs.d/gptel-extra/
+#+end_src
+
+Add the downloaded directory to the load path:
+
+#+begin_src elisp :eval no
+(add-to-list 'load-path "~/.emacs.d/gptel-extra/")
+(require 'gptel-extra)
+#+end_src
+
+* Usage
+
+After installing the package, you should enable =gptel-extra-org-markdown-block-mode= to activate the handling of org-markdown blocks in Gptel streams:
+
+** ~M-x gptel-extra-org-markdown-block-mode~:
+Toggle handling of org-markdown blocks in `gptel' streams.
+
+When this mode is on, it will advise the gptel stream functions
+`gptel-curl--stream-cleanup' and `gptel-curl-get-response' to insert the
+streaming response from ChatGPT as an Org src markdown block.
