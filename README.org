@@ -2,7 +2,7 @@
 
 * About
 
-Gptel-Extra is an extension for the Gptel ChatGPT client designed to enhance interaction experience by providing additional useful features.
+=gptel-extra= is an extension for the [[https://github.com/karthink/gptel][gptel]] ChatGPT client designed to enhance interaction experience by providing additional useful features.
 
 * Table of Contents                                       :TOC_2_gh:QUOTE:
 #+BEGIN_QUOTE
@@ -12,7 +12,6 @@ Gptel-Extra is an extension for the Gptel ChatGPT client designed to enhance int
   - [[#with-use-package-and-straightel][With use-package and straight.el]]
   - [[#manual-installation][Manual installation]]
 - [[#usage][Usage]]
-  - [[#m-x-gptel-extra-org-markdown-block-mode][~M-x gptel-extra-org-markdown-block-mode~:]]
 #+END_QUOTE
 
 * Requirements
@@ -56,9 +55,5 @@ Add the downloaded directory to the load path:
 
 After installing the package, you should enable =gptel-extra-org-markdown-block-mode= to activate the handling of org-markdown blocks in Gptel streams:
 
-** ~M-x gptel-extra-org-markdown-block-mode~:
-Toggle handling of org-markdown blocks in `gptel' streams.
+~M-x gptel-extra-org-markdown-block-mode~: Toggle handling of org-markdown blocks in =gptel= streams. When this mode is on, it will advise the gptel stream functions =gptel-curl--stream-cleanup= and =gptel-curl-get-response= to insert the streaming response from ChatGPT as an Org src markdown block.
 
-When this mode is on, it will advise the gptel stream functions
-`gptel-curl--stream-cleanup' and `gptel-curl-get-response' to insert the
-streaming response from ChatGPT as an Org src markdown block.
