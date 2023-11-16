@@ -6,7 +6,7 @@
 ;; URL: https://github.com/KarimAziev/gptel-extra
 ;; Version: 0.1.0
 ;; Keywords: convenience tools
-;; Package-Requires: ((emacs "26.1") (gptel "0.4.0"))
+;; Package-Requires: ((emacs "29.1") (gptel "0.4.0"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; This file is NOT part of GNU Emacs.
@@ -44,6 +44,20 @@
 
 (require 'gptel)
 (require 'gptel-curl)
+
+(defcustom gptel-extra-curl-args-file-threshold 150000
+  "The size threshold for using a temporary file to pass curl arguments.
+
+If the length of the generated curl arguments string exceeds this threshold,
+the arguments are written to a temporary file instead of being passed directly
+on the command line.
+
+This can be useful for avoiding
+command line length limitations when a large number of arguments are needed.
+
+The value should be a positive integer."
+  :group 'gptel-extra
+  :type 'integer)
 
 (defun gptel-extra--after-begin-block-p ()
   "Check if the cursor is immediately after a begin block in a buffer."
@@ -131,7 +145,15 @@ function FN."
                                                     (forward-line -1)
                                                     (setq e (point)))
                                                   e))))
-                               (delete-region beg end)))))))))
+                               (delete-region beg end))
+                             (move-marker tracking-marker
+                                          (save-excursion
+                                            (forward-line 1)
+                                            (end-of-line)
+                                            (point)))
+                             (add-text-properties
+                              start-marker tracking-marker
+                              '(gptel response rear-nonsticky t)))))))))
 
 (defun gptel-extra-curl-get-response (fn &optional info callback)
   "Apply a function in `org-mode' with a CALLBACK or without it.
@@ -157,7 +179,6 @@ third argument. If not provided, the default value is
       (apply fn info (list
                       (or callback #'gptel-extra-curl-stream-insert-response)))
     (apply fn (delq nil (list info callback)))))
-
 
 
 (defun gptel-extra-curl-stream-insert-response (response info)
@@ -210,7 +231,8 @@ command."
                                                   (unless end-block-p
                                                     "\n#+end_src")))
                                        "")))
-                (insert str)
+                (insert (apply #'propertize str
+                               '(gptel response rear-nonsticky t)))
                 (when (string-match-p str "#\\+end_src")
                   (re-search-backward "#\\+end_src" nil t 1))
                 (forward-line -1)))
@@ -218,7 +240,9 @@ command."
             (set-marker-insertion-type tracking-marker t)
             (plist-put info :tracking-marker tracking-marker))
           (setq response (gptel-extra-stream-normalize-markdown response))
-          (put-text-property 0 (length response) 'gptel 'response response)
+          (add-text-properties
+           0 (length response) '(gptel response rear-nonsticky t)
+           response)
           (goto-char tracking-marker)
           (insert response))))))
 
@@ -241,6 +265,111 @@ streaming response from ChatGPT as an Org src markdown block."
                 #'gptel-extra-curl-stream-cleanup)
     (advice-add 'gptel-curl-get-response :around
                 #'gptel-extra-curl-get-response)))
+
+(defun gptel-extra-save-state ()
+  "Write the gptel state to the buffer.
+
+This enables saving the chat session when writing the buffer to
+disk.  To restore a chat session, turn on `gptel-mode' after
+opening the file."
+  (pcase major-mode
+    ('org-mode
+     (save-excursion
+       (save-restriction
+         (widen)
+         (dolist (item '(gptel-model gptel-temperature gptel--system-message
+                                     gptel-max-tokens
+                                     (eval . (gptel-mode 1))
+                                     (gptel--bounds . gptel--get-bounds)))
+           (cond ((symbolp item)
+                  (add-file-local-variable item (symbol-value item)))
+                 ((consp item)
+                  (add-file-local-variable (car item)
+                                           (if (functionp (cdr item))
+                                               (funcall
+                                                (cdr item))
+                                             (cdr item)))))))))
+    (_ (save-excursion
+         (save-restriction
+           (add-file-local-variable 'gptel-model gptel-model)
+           (unless (equal (default-value 'gptel-temperature) gptel-temperature)
+             (add-file-local-variable 'gptel-temperature gptel-temperature))
+           (unless (string= (default-value 'gptel--system-message)
+                            gptel--system-message)
+             (add-file-local-variable 'gptel--system-message
+                                      gptel--system-message))
+           (when gptel-max-tokens
+             (add-file-local-variable 'gptel-max-tokens gptel-max-tokens))
+           (add-file-local-variable 'gptel--bounds (gptel--get-bounds)))))))
+
+(defun gptel-extra-restore ()
+  "Restore text properties for response regions in the `gptel--bounds' list."
+  (mapc (pcase-lambda (`(,beg . ,end))
+          (put-text-property beg end 'gptel 'response))
+        gptel--bounds))
+
+(defun gptel-extra-adjust-curl-args (curl-args)
+  "Modify curl arguments for binary data.
+
+Argument CURL-ARGS is a list of strings representing the command-line arguments
+to be passed to curl."
+  (when-let* ((pos (seq-position curl-args "-D-"))
+              (data-pos (and (length> curl-args pos)
+                             (1+ pos)))
+              (data-arg (nth data-pos curl-args))
+              (data (and (string-prefix-p "-d" data-arg)
+                         (substring-no-properties data-arg 2))))
+    (append (seq-subseq curl-args 0 data-pos)
+            (list "--data-binary"
+                  (format "@%s"
+                          (make-temp-file "gptel-curl-data"
+                                          nil ".json" data)))
+            (seq-subseq curl-args (1+ data-pos)))))
+
+(defun gptel-extra-curl-get-args (old-fn &rest args)
+  "Customize curl arguments based on length threshold.
+
+Argument OLD-FN is a function to be called with ARGS.
+
+Remaining arguments ARGS are passed to OLD-FN."
+  (let ((curl-args (apply old-fn args)))
+    (if (not (length> (string-join curl-args " ")
+                      gptel-extra-curl-args-file-threshold))
+        curl-args
+      (or (gptel-extra-adjust-curl-args curl-args)
+          curl-args))))
+
+
+(defun gptel-extra-cleanup-temp-files ()
+  "Delete temporary `gptel-curl-data' files."
+  (dolist (file
+           (directory-files (temporary-file-directory) t "\\`gptel-curl-data"))
+    (delete-file file)))
+
+;;;###autoload
+(define-minor-mode gptel-extra-mode
+  "Enhance GPT-EL with additional functionality.
+
+Enable or disable additional features for GPT-EL by overriding certain functions
+and cleaning up temporary files on exit. When enabled, modify the behavior of
+`gptel-curl--get-args' to use custom arguments, override the state saving and
+restoring functions with enhanced versions, and ensure temporary files are
+cleaned up when Emacs is closed. When disabled, revert these modifications to
+their original behavior."
+  :lighter " gptel+"
+  :group 'gptel
+  :global t
+  (advice-remove 'gptel-curl--get-args #'gptel-extra-curl-get-args)
+  (advice-remove 'gptel--save-state #'gptel-extra-save-state)
+  (advice-remove 'gptel--restore-state #'gptel-extra-restore)
+  (remove-hook 'kill-emacs-hook #'gptel-extra-cleanup-temp-files)
+  (when gptel-extra-mode
+    (advice-add 'gptel-curl--get-args
+                :around #'gptel-extra-curl-get-args)
+    (advice-add 'gptel--save-state :override #'gptel-extra-save-state)
+    (advice-add 'gptel--restore-state :override #'gptel-extra-restore)
+    (add-hook 'kill-emacs-hook #'gptel-extra-cleanup-temp-files)))
+
 
 
 
