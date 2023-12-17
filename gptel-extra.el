@@ -41,23 +41,40 @@
 ;;
 ;;; Code:
 
-
 (require 'gptel)
 (require 'gptel-curl)
 
-(defcustom gptel-extra-curl-args-file-threshold 150000
-  "The size threshold for using a temporary file to pass curl arguments.
-
-If the length of the generated curl arguments string exceeds this threshold,
-the arguments are written to a temporary file instead of being passed directly
-on the command line.
-
-This can be useful for avoiding
-command line length limitations when a large number of arguments are needed.
-
-The value should be a positive integer."
+(defcustom gptel-extra-ext-to-org-langs-alist '(("ts" . "typescript")
+                                                ("tsx" . "typescript")
+                                                ("js" . "javascript")
+                                                ("el" . "elisp")
+                                                ("jsx" . "javascript")
+                                                ("c" . "C")
+                                                ("c++" . "C++")
+                                                ("py" . "python")
+                                                ("md" . "markdown")
+                                                ("toml" . "toml")
+                                                ("sh" . "shell"))
+  "Alist of file extensions to Org mode languages."
   :group 'gptel-extra
-  :type 'integer)
+  :type '(alist
+          :key-type string
+          :value-type string))
+
+(defcustom gptel-extra-default-save-dir (locate-user-emacs-file ".gptel-extra")
+  "Default directory for saving GPT-EL extra state files.
+
+The default directory for saving extra GPT-EL state files.
+
+Specifies the directory where GPT-EL state files are saved by default. The
+directory is resolved relative to the user's Emacs directory. If the directory
+does not exist, it will be created when saving a state file for the first time.
+
+To change the default save directory, set the value to a string representing the
+desired directory path. Ensure that the path is valid and that Emacs has the
+necessary permissions to create and write to the directory."
+  :group 'gptel-extra
+  :type 'directory)
 
 (defun gptel-extra--after-begin-block-p ()
   "Check if the cursor is immediately after a begin block in a buffer."
@@ -89,16 +106,15 @@ The value should be a positive integer."
                (string-match-p ",?#\\+end_" (string-trim word)))
              line-beg)))))
 
-
 (defun gptel-extra-stream-normalize-markdown (str)
   "Convert bullet points to headings in a Markdown string.
 
 Argument STR is a string that represents the markdown content to be normalized."
-;; relint suppression: REGEXP
+  ;; relint suppression: REGEXP
   (if (string-match-p "^[\s\t]*\\([*]+\\)" str)
       (with-temp-buffer (insert str)
                         (while
-                        ;; relint suppression: REGEXP
+                            ;; relint suppression: REGEXP
                             (re-search-backward "^[\s\t]*\\([*]+\\)[\s\t]" nil
                                                 t 1)
                           (let ((beg (match-beginning 1))
@@ -151,9 +167,13 @@ function FN."
                                             (forward-line 1)
                                             (end-of-line)
                                             (point)))
-                             (add-text-properties
-                              start-marker tracking-marker
-                              '(gptel response rear-nonsticky t)))))))))
+                             (let ((pos (if (markerp start-marker)
+                                            (marker-position start-marker)
+                                          start-marker)))
+                               (add-text-properties
+                                pos
+                                tracking-marker
+                                '(gptel response rear-nonsticky t))))))))))
 
 (defun gptel-extra-curl-get-response (fn &optional info callback)
   "Apply a function in `org-mode' with a CALLBACK or without it.
@@ -179,7 +199,6 @@ third argument. If not provided, the default value is
       (apply fn info (list
                       (or callback #'gptel-extra-curl-stream-insert-response)))
     (apply fn (delq nil (list info callback)))))
-
 
 (defun gptel-extra-curl-stream-insert-response (response info)
   "Insert streaming RESPONSE from ChatGPT as Org src markdown block.
@@ -278,9 +297,13 @@ opening the file."
        (save-restriction
          (widen)
          (dolist (item '(gptel-model gptel-temperature gptel--system-message
-                                     gptel-max-tokens
-                                     (eval . (gptel-mode 1))
-                                     (gptel--bounds . gptel--get-bounds)))
+                         gptel-max-tokens
+                         (eval . (progn
+                                   (require 'org)
+                                   (require 'gptel)
+                                   (org-mode 1)
+                                   (gptel-mode 1)))
+                         (gptel--bounds . gptel--get-bounds)))
            (cond ((symbolp item)
                   (add-file-local-variable item (symbol-value item)))
                  ((consp item)
@@ -308,43 +331,72 @@ opening the file."
           (put-text-property beg end 'gptel 'response))
         gptel--bounds))
 
-(defun gptel-extra-adjust-curl-args (curl-args)
-  "Modify curl arguments for binary data.
 
-Argument CURL-ARGS is a list of strings representing the command-line arguments
-to be passed to curl."
-  (when-let* ((pos (seq-position curl-args "-D-"))
-              (data-pos (and (length> curl-args pos)
-                             (1+ pos)))
-              (data-arg (nth data-pos curl-args))
-              (data (and (string-prefix-p "-d" data-arg)
-                         (substring-no-properties data-arg 2))))
-    (append (seq-subseq curl-args 0 data-pos)
-            (list "--data-binary"
-                  (format "@%s"
-                          (make-temp-file "gptel-curl-data"
-                                          nil ".json" data)))
-            (seq-subseq curl-args (1+ data-pos)))))
+(defun gptel-extra-trim-org-src-markdown-block (content)
+  "Trim Markdown source blocks in Org content.
 
-(defun gptel-extra-curl-get-args (old-fn &rest args)
-  "Customize curl arguments based on length threshold.
+Argument CONTENT is a string containing the Org source block to be trimmed."
+  (when-let* ((lines (split-string content "\n" t))
+              (prefix (pop lines))
+              (suffix (car (last lines)))
+              (case-fold-search t))
+    (when (and
+           (string-match-p "^#?\\+?begin_src markdown$" (string-trim prefix))
+           (string-match-p "^#?\\+?end_src$" (string-trim suffix)))
+      (string-join
+       (nbutlast lines 1)
+       "\n"))))
 
-Argument OLD-FN is a function to be called with ARGS.
+(declare-function org-export-expand-include-keyword "ox")
 
-Remaining arguments ARGS are passed to OLD-FN."
-  (let ((curl-args (apply old-fn args)))
-    (if (not (length> (string-join curl-args " ")
-                      gptel-extra-curl-args-file-threshold))
-        curl-args
-      (or (gptel-extra-adjust-curl-args curl-args)
-          curl-args))))
+(defun gptel-extra--include-files (content)
+  "Expand included files in Org CONTENT and return result.
 
+Argument CONTENT is a string containing the text with `org-mode' include
+keywords to be expanded."
+  (require 'org)
+  (require 'ox)
+  (with-temp-buffer
+    (insert content)
+    (org-export-expand-include-keyword)
+    (buffer-substring-no-properties (point-min)
+                                    (point-max))))
 
-(defun gptel-extra-cleanup-temp-files ()
-  "Delete temporary `gptel-curl-data' files."
-  (dolist (file
-           (directory-files (temporary-file-directory) t "\\`gptel-curl-data"))
-    (delete-file file)))
+(defun gptel-extra-denormalize-prompt-item (plist)
+  "Modify PLIST based on :role and content trimming.
+
+Argument PLIST is a property list containing the data to denormalize."
+  (let ((content (plist-get plist :content)))
+    (or
+     (pcase (plist-get plist :role)
+       ("assistant"
+        (when-let ((new-content
+                    (gptel-extra-trim-org-src-markdown-block content)))
+          (plist-put plist :content new-content)))
+       ("user"
+        (let ((case-fold-search t))
+          (if-let ((new-content
+                    (and (string-match-p "#\\+include:" content)
+                         (gptel-extra--include-files content))))
+              (plist-put plist :content new-content)
+            plist)))
+       (_ plist))
+     plist)))
+
+(defun gptel-extra-normalize-prompts (prompts)
+  "Produce list of arguments for calling Curl.
+
+PROMPTS is the data to send, TOKEN is a unique identifier."
+  (mapcar
+   #'gptel-extra-denormalize-prompt-item
+   prompts))
+
+(defun gptel-extra-filter-curl--get-args (args)
+  "Normalize prompt in ARGS for Curl call.
+
+Argument ARGS is a list of prompts to be normalized for Curl command execution."
+  (setcar args (gptel-extra-normalize-prompts (car args)))
+  args)
 
 ;;;###autoload
 (define-minor-mode gptel-extra-mode
@@ -359,19 +411,199 @@ their original behavior."
   :lighter " gptel+"
   :group 'gptel
   :global t
-  (advice-remove 'gptel-curl--get-args #'gptel-extra-curl-get-args)
+  (advice-remove 'gptel-curl--get-args #'gptel-extra-filter-curl--get-args)
   (advice-remove 'gptel--save-state #'gptel-extra-save-state)
   (advice-remove 'gptel--restore-state #'gptel-extra-restore)
-  (remove-hook 'kill-emacs-hook #'gptel-extra-cleanup-temp-files)
   (when gptel-extra-mode
     (advice-add 'gptel-curl--get-args
-                :around #'gptel-extra-curl-get-args)
+                :filter-args #'gptel-extra-filter-curl--get-args)
     (advice-add 'gptel--save-state :override #'gptel-extra-save-state)
-    (advice-add 'gptel--restore-state :override #'gptel-extra-restore)
-    (add-hook 'kill-emacs-hook #'gptel-extra-cleanup-temp-files)))
+    (advice-add 'gptel--restore-state :override #'gptel-extra-restore)))
+
+(defun gptel-extra-get-files (files-or-dirs)
+  "Retrieve all files from given directories and files list recursively.
+
+Argument FILES-OR-DIRS is a list of files or directories."
+  (let ((files))
+    (dolist (file files-or-dirs)
+      (if (file-directory-p file)
+          (setq files (nconc files
+                             (gptel-extra-get-files
+                              (directory-files file t directory-files-no-dot-files-regexp))))
+        (push file files)))
+    (nreverse files)))
+
+;;;###autoload
+(defun gptel-extra-copy-dir-tree-as-org-block (dir)
+  "Copy directory tree to Org block.
+
+Argument DIR is a string representing the directory path to be processed by the
+function."
+  (interactive (list (read-directory-name "Directory: ")))
+  (with-temp-buffer (if (zerop
+                         (call-process "tree" nil t nil dir))
+                        (let ((str (buffer-string)))
+                          (kill-new
+                           (format
+                            "Here is files in %s\n#+begin_example\n%s\n#+end_example"
+                            (gptel-extra-get-project-relative-name dir)
+                            str))
+                          (message "Copied")
+                          str)
+                      (message "An error occured"))))
+
+(defun gptel-extra-magit-staged-files ()
+  "List expanded paths of staged Git files."
+  (require 'magit-git)
+  (require 'magit)
+  (let ((repo
+         (when (fboundp 'magit-toplevel)
+           (magit-toplevel)))
+        (files
+         (when (fboundp 'magit-staged-files)
+           (magit-staged-files))))
+    (mapcar (lambda (it)
+              (expand-file-name it repo))
+            files)))
+
+(defun gptel-extra-get-dired-marked-files ()
+  "Retrieve marked files from the active `dired-mode' buffer."
+  (require 'dired)
+  (when (fboundp 'dired-get-marked-files)
+    (when-let ((buff (seq-find (lambda
+                                 (buff)
+                                 (and (eq (buffer-local-value 'major-mode buff)
+                                          'dired-mode)
+                                      (get-buffer-window buff)
+                                      (with-current-buffer buff
+                                        (dired-get-marked-files))))
+                               (delete-dups (append (mapcar #'window-buffer
+                                                            (window-list))
+                                                    (buffer-list))))))
+      (with-current-buffer buff
+        (dired-get-marked-files)))))
+
+;;;###autoload
+(defun gptel-extra-copy-staged-files-contents-as-org-blocks ()
+  "Copy staged files contents into Org blocks."
+  (interactive)
+  (let* ((files (gptel-extra-magit-staged-files))
+         (str (gptel-extra-copy-file-contents-as-org-blocks files)))
+    (kill-new str)
+    (message "Copied content of %s files" (length files))
+    str))
+
+;;;###autoload
+(defun gptel-extra-copy-files-contents-as-org-blocks ()
+  "Copy file contents into Org-mode blocks."
+  (interactive)
+  (let* ((files (or (gptel-extra-get-files
+                     (gptel-extra-get-dired-marked-files))
+                    (and buffer-file-name (list buffer-file-name))))
+         (str (gptel-extra-copy-file-contents-as-org-blocks files)))
+    (kill-new str)
+    (message "Copied content of %s files" (length files))
+    str))
 
 
+(defun gptel-extra-get-file-content (file)
+  "Read and return the content of a specified FILE.
 
+Argument FILE is a string representing the path of the FILE to be read."
+  (with-temp-buffer (insert-file-contents file)
+                    (buffer-substring-no-properties
+                     (point-min)
+                     (point-max))))
+
+(defun gptel-extra-get-project-relative-name (file)
+  "Retrieve the relative name of a FILE within its project.
+
+Argument FILE is a string representing the FILE path."
+  (require 'project)
+  (let ((proj
+         (ignore-errors
+           (when (fboundp 'project-root)
+             (project-root
+              (project-current nil (if (file-directory-p file)
+                                       file
+                                     (file-name-parent-directory file))))))))
+    (if proj
+        (file-relative-name file proj)
+      (abbreviate-file-name file))))
+
+;;;###autoload
+(defun gptel-extra-set-default-dir-to-project-dir ()
+  "Set `default-directory' to a selected known project directory."
+  (interactive)
+  (require 'project)
+  (when-let ((proj (completing-read "Project: " (project-known-project-roots))))
+    (setq default-directory (expand-file-name proj))))
+
+;;;###autoload
+(defun gptel-extra-save ()
+  "Save buffer content with timestamped filename."
+  (interactive)
+  (gptel-extra-save-state)
+  (unless (file-exists-p gptel-extra-default-save-dir)
+    (make-directory gptel-extra-default-save-dir t))
+  (let ((content (buffer-substring-no-properties (point-min)
+                                                 (point-max)))
+        (name (expand-file-name (concat (file-name-nondirectory
+                                         (or buffer-file-name (buffer-name)))
+                                        "~"
+                                        (format-time-string
+                                         "%Y_%m_%d_%H_%M_%S"))
+                                gptel-extra-default-save-dir)))
+    (write-region content nil name nil nil)))
+
+;;;###autoload
+(defun gptel-extract-saved ()
+  "Prompt user to select a file from saved GPT-EL states."
+  (interactive)
+  (when (file-exists-p gptel-extra-default-save-dir)
+    (completing-read "File: "
+                     (directory-files gptel-extra-default-save-dir nil
+                                      directory-files-no-dot-files-regexp))))
+
+
+(defun gptel-extra-file-content-as-org-block (file)
+  "Get FILE content as org block with language based on file extension.
+
+Argument FILE is a string representing the path to the file whose content will
+be extracted and formatted as an org block."
+  (require 'project)
+  (let* ((parent-dir (file-name-parent-directory file))
+         (proj (ignore-errors
+                 (when (fboundp 'project-root)
+                   (project-root
+                    (project-current nil parent-dir)))))
+         (title (if proj
+                    (substring-no-properties
+                     (expand-file-name file)
+                     (length (expand-file-name proj)))
+                  (abbreviate-file-name file)))
+         (file-ext (file-name-extension file))
+         (ob-lang (and file-ext
+                       (cdr (assoc-string file-ext
+                                          gptel-extra-ext-to-org-langs-alist))))
+         (content
+          (concat
+           (format "#+INCLUDE: %s" file)
+           " "
+           (if ob-lang (format "SRC %s" ob-lang) "EXAMPLE"))))
+    (concat "- " title "\n"
+            "\n"
+            content
+            "\n\n")))
+
+(defun gptel-extra-copy-file-contents-as-org-blocks (files)
+  "Convert file contents into org blocks based on file extension.
+
+Argument FILES is a list of strings, each representing the path to a file whose
+content will be extracted and formatted as an org block."
+  (mapconcat #'gptel-extra-file-content-as-org-block
+             files
+             "\n\n"))
 
 (provide 'gptel-extra)
 ;;; gptel-extra.el ends here
