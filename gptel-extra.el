@@ -106,27 +106,6 @@ necessary permissions to create and write to the directory."
                (string-match-p ",?#\\+end_" (string-trim word)))
              line-beg)))))
 
-(defun gptel-extra-stream-normalize-markdown (str)
-  "Convert bullet points to headings in a Markdown string.
-
-Argument STR is a string that represents the markdown content to be normalized."
-  ;; relint suppression: REGEXP
-  (if (string-match-p "^[\s\t]*\\([*]+\\)" str)
-      (with-temp-buffer (insert str)
-                        (while
-                            ;; relint suppression: REGEXP
-                            (re-search-backward "^[\s\t]*\\([*]+\\)[\s\t]" nil
-                                                t 1)
-                          (let ((beg (match-beginning 1))
-                                (end (match-end 1))
-                                (count (length (match-string-no-properties 1))))
-                            (replace-region-contents beg end (lambda ()
-                                                               (make-string
-                                                                count (string-to-char
-                                                                       "#"))))))
-                        (buffer-string))
-    str))
-
 (defun gptel-extra-curl-stream-cleanup (fn &rest args)
   "Clean up the stream after a successful HTTP request.
 
@@ -258,7 +237,6 @@ command."
             (setq tracking-marker (set-marker (make-marker) (point)))
             (set-marker-insertion-type tracking-marker t)
             (plist-put info :tracking-marker tracking-marker))
-          (setq response (gptel-extra-stream-normalize-markdown response))
           (add-text-properties
            0 (length response) '(gptel response rear-nonsticky t)
            response)
