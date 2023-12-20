@@ -299,19 +299,24 @@ opening the file."
          (dolist (item '(gptel-model gptel-temperature gptel--system-message
                          gptel-max-tokens
                          (eval . (progn
-                                   (require 'org)
                                    (require 'gptel)
-                                   (org-mode 1)
                                    (gptel-mode 1)))
                          (gptel--bounds . gptel--get-bounds)))
-           (cond ((symbolp item)
-                  (add-file-local-variable item (symbol-value item)))
-                 ((consp item)
-                  (add-file-local-variable (car item)
-                                           (if (functionp (cdr item))
-                                               (funcall
-                                                (cdr item))
-                                             (cdr item)))))))))
+           (pcase item
+             ((pred (symbolp))
+              (add-file-local-variable item (symbol-value item)))
+             (`(eval . ,value)
+              (let ((regex
+                     (concat "^" (string-trim (or comment-start "#")) " eval: "
+                             (regexp-quote
+                              (prin1-to-string
+                               value)))))
+                (unless (save-excursion
+                          (save-restriction
+                            (widen)
+                            (goto-char (point-max))
+                            (re-search-backward regex nil t 1)))
+                  (add-file-local-variable (car item) value)))))))))
     (_ (save-excursion
          (save-restriction
            (add-file-local-variable 'gptel-model gptel-model)
