@@ -340,10 +340,11 @@ keywords to be expanded."
   (require 'org)
   (require 'ox)
   (with-temp-buffer
-    (insert content)
-    (org-export-expand-include-keyword)
-    (buffer-substring-no-properties (point-min)
-                                    (point-max))))
+    (let ((tab-width 8))
+      (insert content)
+      (org-export-expand-include-keyword)
+      (buffer-substring-no-properties (point-min)
+                                      (point-max)))))
 
 (defun gptel-extra-denormalize-prompt-item (plist)
   "Modify PLIST based on :role and content trimming.
