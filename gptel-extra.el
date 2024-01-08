@@ -192,7 +192,12 @@ command."
       (with-current-buffer (marker-buffer start-marker)
         (save-excursion
           (unless tracking-marker
-            (gptel--update-header-line " Typing..." 'success)
+            (when-let
+                ((update-fn
+                  (seq-find #'fboundp
+                            '(gptel--update-status
+                              gptel--update-header-line))))
+              (funcall update-fn " Typing..." 'success))
             (goto-char start-marker)
             (unless (or (bobp)
                         (plist-get info :in-place))
