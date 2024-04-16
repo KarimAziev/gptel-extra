@@ -372,13 +372,15 @@ Argument PLIST is a property list containing the data to denormalize."
        (_ plist))
      plist)))
 
-(defun gptel-extra-normalize-prompts (prompts)
-  "Produce list of arguments for calling Curl.
+(defun gptel-extra-normalize-prompts (plist)
+  "Normalize prompt in PLIST by denormalizing each message.
 
-PROMPTS is the data to send, TOKEN is a unique identifier."
-  (mapcar
-   #'gptel-extra-denormalize-prompt-item
-   prompts))
+Argument PLIST is a property list containing the data to normalize."
+  (plist-put plist :messages
+             (vconcat
+              (mapcar
+               #'gptel-extra-denormalize-prompt-item
+               (plist-get plist :messages)))))
 
 (defun gptel-extra-filter-curl--get-args (args)
   "Normalize prompt in ARGS for Curl call.
