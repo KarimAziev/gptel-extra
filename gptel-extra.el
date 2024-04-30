@@ -283,8 +283,7 @@ opening the file."
                          gptel-max-tokens
                          (eval . (progn
                                    (require 'gptel)
-                                   (gptel-mode 1)))
-                         (gptel--bounds . gptel--get-bounds)))
+                                   (gptel-mode 1)))))
            (pcase item
              ((pred (symbolp))
               (add-file-local-variable item (symbol-value item)))
@@ -299,7 +298,8 @@ opening the file."
                             (widen)
                             (goto-char (point-max))
                             (re-search-backward regex nil t 1)))
-                  (add-file-local-variable (car item) value)))))))))
+                  (add-file-local-variable (car item) value))))))
+         (add-file-local-variable 'gptel--bounds (gptel--get-buffer-bounds)))))
     (_ (save-excursion
          (save-restriction
            (add-file-local-variable 'gptel-model gptel-model)
@@ -311,7 +311,7 @@ opening the file."
                                       gptel--system-message))
            (when gptel-max-tokens
              (add-file-local-variable 'gptel-max-tokens gptel-max-tokens))
-           (add-file-local-variable 'gptel--bounds (gptel--get-bounds)))))))
+           (add-file-local-variable 'gptel--bounds (gptel--get-buffer-bounds)))))))
 
 (defun gptel-extra-restore ()
   "Restore text properties for response regions in the `gptel--bounds' list."
