@@ -6,7 +6,7 @@
 ;; URL: https://github.com/KarimAziev/gptel-extra
 ;; Version: 0.1.0
 ;; Keywords: convenience tools
-;; Package-Requires: ((emacs "29.1") (gptel "0.4.0"))
+;; Package-Requires: ((emacs "29.1") (gptel "0.8.6"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; This file is NOT part of GNU Emacs.
@@ -595,6 +595,61 @@ content will be extracted and formatted as an org block."
   (mapconcat #'gptel-extra-file-content-as-org-block
              files
              "\n\n"))
+
+;;;###autoload
+(defun gptel-extra (name &optional _ initial interactivep)
+  "Switch to or start a chat session with NAME.
+
+With a prefix arg, query for a (new) session name.
+
+Ask for API-KEY if `gptel-api-key' is unset.
+
+If region is active, use it as the INITIAL prompt.  Returns the
+buffer created or switched to.
+
+INTERACTIVEP is t when gptel is called interactively."
+  (interactive
+   (let* ((backend (default-value 'gptel-backend))
+          (backend-name
+           (format "*%s*" (gptel-backend-name backend))))
+     (list (if current-prefix-arg
+               (read-buffer "Create or choose gptel buffer: "
+                            backend-name nil ; DEFAULT and REQUIRE-MATCH
+                            (lambda (b)      ; PREDICATE
+                              (buffer-local-value 'gptel-mode
+                                                  (get-buffer (or (car-safe b) b)))))
+             backend-name)
+           (condition-case nil
+               (gptel--get-api-key
+                (gptel-backend-key backend))
+             ((error user-error)
+              (setq gptel-api-key
+                    (read-passwd
+                     (format "%s API key: " backend-name)))))
+           (and (use-region-p)
+                (buffer-substring (region-beginning)
+                                  (region-end)))
+           t)))
+  (with-current-buffer (get-buffer-create name)
+    (cond ((eq major-mode gptel-default-mode))
+          ((eq gptel-default-mode 'text-mode)
+           (text-mode)
+           (visual-line-mode 1))
+          (t (funcall gptel-default-mode)))
+    (gptel--sanitize-model
+     :backend (default-value 'gptel-backend)
+     :model (default-value 'gptel-model)
+     :shoosh nil)
+    (unless gptel-mode (gptel-mode 1))
+    (goto-char (point-max))
+    (skip-chars-backward "\t\r\n")
+    (if (bobp)
+        (insert (or initial (gptel-prompt-prefix-string))))
+    (when interactivep
+      (display-buffer (current-buffer) gptel-display-buffer-action)
+      (message "Send your query with %s!"
+               (substitute-command-keys "\\[gptel-send]")))
+    (current-buffer)))
 
 (provide 'gptel-extra)
 ;;; gptel-extra.el ends here
