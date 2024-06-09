@@ -46,6 +46,7 @@
 
 (defcustom gptel-extra-ext-to-org-langs-alist '(("ts" . "typescript")
                                                 ("tsx" . "typescript")
+                                                ("vue" . "vue-mode")
                                                 ("js" . "javascript")
                                                 ("el" . "elisp")
                                                 ("jsx" . "javascript")
@@ -54,7 +55,8 @@
                                                 ("py" . "python")
                                                 ("md" . "markdown")
                                                 ("toml" . "toml")
-                                                ("sh" . "shell"))
+                                                ("sh" . "shell")
+                                                ("org" . "org"))
   "Alist of file extensions to Org mode languages."
   :group 'gptel-extra
   :type '(alist
@@ -75,6 +77,34 @@ desired directory path. Ensure that the path is valid and that Emacs has the
 necessary permissions to create and write to the directory."
   :group 'gptel-extra
   :type 'directory)
+
+(defcustom gptel-extra-tree-ignored-directories '("node_modules" "env" "venv"
+                                                  "__pycache__")
+  "List of directory names to be ignored when generating a directory tree.
+
+Each element in the list should be a string representing a
+directory name that should be excluded from the tree
+representation.
+
+It is used in the command `gptel-extra-copy-dir-tree-as-org-block'."
+  :group 'gptel-extra
+  :type '(repeat string))
+
+(defcustom gptel-extra-tree-ignored-name-regexps '("\\`\\.dropbox\\'"
+                                                   "\\`node_modules\\'")
+  "List of regex patterns for directory names to ignore in tree generation.
+
+A list of regular expressions used to ignore specific file or directory
+names when generating a directory tree structure.
+
+Each element in the list should be a string representing a regular
+expression. Files or directories matching any of these regular
+expressions will be excluded from the tree representation.
+
+It is used in the command `gptel-extra-copy-dir-tree-as-org-block'."
+  :group 'gptel-extra
+  :type '(repeat regexp))
+
 
 (defun gptel-extra--after-begin-block-p ()
   "Check if the cursor is immediately after a begin block in a buffer."
@@ -424,6 +454,68 @@ Argument FILES-OR-DIRS is a list of files or directories."
         (push file files)))
     (nreverse files)))
 
+(defun gptel-extra--get-directory-tree-string (directory &optional prefix
+                                                         allowed-files)
+  "Generate a string representing the tree structure of DIRECTORY.
+
+Argument DIRECTORY is the path of the directory to be represented as a tree.
+
+Optional argument PREFIX is a string used to prefix each line in the tree
+representation, defaulting to an empty string.
+
+Optional argument ALLOWED-FILES is a list of files to include in the tree,
+defaulting to nil."
+  (let ((prefix (or prefix ""))
+        (proj
+         (unless allowed-files
+           (progn
+             (require 'project nil t)
+             (ignore-errors (project-current nil directory)))))
+        (proj-dirs)
+        (result))
+    (when (and (not allowed-files)
+               proj
+               (fboundp 'project-files))
+      (setq allowed-files (mapcar #'expand-file-name (project-files proj))))
+    (setq proj-dirs (delete-dups
+                     (mapcar (lambda (it) (if (file-directory-p it)
+                                              (file-name-as-directory it)
+                                            (file-name-directory it)))
+                             allowed-files)))
+    (dolist (entry (directory-files
+                    directory t
+                    directory-files-no-dot-files-regexp))
+      (let ((non-dir-name (file-name-nondirectory entry))
+            (dirp (file-directory-p entry)))
+        (when (and
+               (or (not gptel-extra-tree-ignored-name-regexps)
+                   (not (seq-find (lambda (re)
+                                    (string-match-p re non-dir-name))
+                                  gptel-extra-tree-ignored-name-regexps)))
+               (if dirp
+                   (and (or (not proj-dirs)
+                            (member (file-name-as-directory entry) proj-dirs))
+                        (not
+                         (member non-dir-name
+                                 gptel-extra-tree-ignored-directories)))
+                 (and (or (not allowed-files)
+                          (member entry allowed-files))
+                      (not
+                       (member non-dir-name
+                               gptel-extra-tree-ignored-directories)))))
+          (let ((str (if dirp
+                         (concat prefix "├── " non-dir-name
+                                 "/\n"
+                                 (gptel-extra--get-directory-tree-string
+                                  entry
+                                  (concat
+                                   prefix
+                                   "│   ")
+                                  allowed-files))
+                       (concat prefix "├── " non-dir-name))))
+            (push str result)))))
+    (string-join result "\n")))
+
 ;;;###autoload
 (defun gptel-extra-copy-dir-tree-as-org-block (dir)
   "Copy directory tree to Org block.
@@ -431,17 +523,14 @@ Argument FILES-OR-DIRS is a list of files or directories."
 Argument DIR is a string representing the directory path to be processed by the
 function."
   (interactive (list (read-directory-name "Directory: ")))
-  (with-temp-buffer (if (zerop
-                         (call-process "tree" nil t nil dir))
-                        (let ((str (buffer-string)))
-                          (kill-new
-                           (format
-                            "Here is files in %s\n#+begin_example\n%s\n#+end_example"
-                            (gptel-extra-get-project-relative-name dir)
-                            str))
-                          (message "Copied")
-                          str)
-                      (message "An error occured"))))
+  (let ((str (gptel-extra--get-directory-tree-string dir)))
+    (kill-new
+     (format
+      "Here is files in %s\n#+begin_example\n%s\n#+end_example"
+      (gptel-extra-get-project-relative-name dir)
+      str))
+    (message "Copied")
+    str))
 
 (defun gptel-extra-magit-staged-files ()
   "List expanded paths of staged Git files."
@@ -505,6 +594,7 @@ Argument FILE is a string representing the path of the FILE to be read."
                     (buffer-substring-no-properties
                      (point-min)
                      (point-max))))
+
 
 (defun gptel-extra-get-project-relative-name (file)
   "Retrieve the relative name of a FILE within its project.
