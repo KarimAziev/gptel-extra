@@ -468,9 +468,8 @@ defaulting to nil."
   (let ((prefix (or prefix ""))
         (proj
          (unless allowed-files
-           (progn
-             (require 'project nil t)
-             (ignore-errors (project-current nil directory)))))
+           (require 'project nil t)
+           (ignore-errors (project-current nil directory))))
         (proj-dirs)
         (result))
     (when (and (not allowed-files)
