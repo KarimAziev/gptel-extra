@@ -222,7 +222,7 @@ command."
       (with-current-buffer (marker-buffer start-marker)
         (save-excursion
           (unless tracking-marker
-            (when-let
+            (when-let*
                 ((update-fn
                   (seq-find #'fboundp
                             '(gptel--update-status
@@ -389,12 +389,12 @@ Argument PLIST is a property list containing the data to denormalize."
     (or
      (pcase (plist-get plist :role)
        ("assistant"
-        (when-let ((new-content
+        (when-let* ((new-content
                     (gptel-extra-trim-org-src-markdown-block content)))
           (plist-put plist :content new-content)))
        ("user"
         (let ((case-fold-search t))
-          (if-let ((new-content
+          (if-let* ((new-content
                     (and (string-match-p "#\\+include:" content)
                          (gptel-extra--include-files content))))
               (plist-put plist :content new-content)
@@ -549,7 +549,7 @@ function."
   "Retrieve marked files from the active `dired-mode' buffer."
   (require 'dired)
   (when (fboundp 'dired-get-marked-files)
-    (when-let ((buff (seq-find (lambda
+    (when-let* ((buff (seq-find (lambda
                                  (buff)
                                  (and (eq (buffer-local-value 'major-mode buff)
                                           'dired-mode)
@@ -616,7 +616,7 @@ Argument FILE is a string representing the FILE path."
   "Set `default-directory' to a selected known project directory."
   (interactive)
   (require 'project)
-  (when-let ((proj (completing-read "Project: " (project-known-project-roots))))
+  (when-let* ((proj (completing-read "Project: " (project-known-project-roots))))
     (setq default-directory (expand-file-name proj))))
 
 ;;;###autoload
