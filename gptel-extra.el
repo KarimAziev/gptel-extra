@@ -42,7 +42,6 @@
 ;;; Code:
 
 (require 'gptel)
-(require 'gptel-curl)
 
 (defcustom gptel-extra-ext-to-org-langs-alist '(("ts" . "typescript")
                                                 ("tsx" . "typescript")
@@ -149,7 +148,7 @@ that will be applied to the rest of the arguments.
 Optional argument ARGS is a list of arguments that will be passed to the
 function FN."
   (let ((gptel-prompt-prefix-alist nil))
-    (let* ((info (alist-get (car args) gptel-curl--process-alist))
+    (let* ((info (alist-get (car args) gptel--request-alist))
            (http-status (plist-get info :http-status))
            (tracking-marker (plist-get info :tracking-marker))
            (start-marker (plist-get info :position)))
@@ -184,8 +183,8 @@ function FN."
                                 tracking-marker
                                 '(gptel response rear-nonsticky t))))))))))
 
-(defun gptel-extra-curl-get-response (fn &optional info callback)
-  "Apply a function in `org-mode' with a CALLBACK or without it.
+(defun gptel-extra-curl-get-response (fn fsm &rest args)
+  "Apply a function FN in `org-mode'.
 
 This function should be used as advice for `gptel-curl-get-response':
 
@@ -194,89 +193,110 @@ This function should be used as advice for `gptel-curl-get-response':
 
 Argument FN is expected to be a function `gptel-curl-get-response' that is
 passed as the first argument to `gptel-extra-curl-get-response'.
-Optional argument INFO is a property list (plist) that can be optionally
-passed to the function.
-If not provided, its default value is nil.
 
-Optional argument CALLBACK is a function that is optionally passed as the
-third argument. If not provided, the default value is
-`gptel-extra-curl-stream-insert-response'."
-  (if (eq (buffer-local-value
-           'major-mode
-           (plist-get info :buffer))
-          'org-mode)
-      (apply fn info (list
-                      (or callback #'gptel-extra-curl-stream-insert-response)))
-    (apply fn (delq nil (list info callback)))))
+FSM is the state machine driving this request.  Its INFO slot
+contains the data required for setting up the request.  INFO is a
+plist with the following keys, among others:
+- :data     (the data being sent)
+- :buffer   (the gptel buffer)
+- :position (marker at which to insert the response).
+- :callback (optional, the request callback).
 
-(defun gptel-extra-curl-stream-insert-response (response info)
+ARGS is additional arguments, if any to apply."
+  (let* ((info (gptel-fsm-info fsm))
+         (callback (plist-get info :callback))
+         (buff (plist-get info :buffer)))
+    (if (not (and buff
+                  (not callback)
+                  (eq (buffer-local-value 'major-mode buff)
+                      'org-mode)))
+        (apply fn (append (list info) args))
+      (let ((pl (seq-copy info)))
+        (setq pl (plist-put pl :callback #'gptel-extra-curl-stream-insert-response))
+        (setq pl (plist-put pl :transformer nil))
+        (setf (gptel-fsm-info fsm) pl)
+        (apply fn (append (list fsm) args))))))
+
+(defun gptel-extra-curl-stream-insert-response (response info &optional raw)
   "Insert streaming RESPONSE from ChatGPT as Org src markdown block.
 
 INFO is a mutable plist containing information relevant to this buffer.
 
 Argument RESPONSE is a string that represents the RESPONSE from the curl
-command."
-  (let ((start-marker (plist-get info :position))
-        (tracking-marker (plist-get info :tracking-marker)))
-    (when response
-      (with-current-buffer (marker-buffer start-marker)
-        (save-excursion
-          (unless tracking-marker
-            (when-let*
-                ((update-fn
-                  (seq-find #'fboundp
-                            '(gptel--update-status
-                              gptel--update-header-line))))
-              (funcall update-fn " Typing..." 'success))
-            (goto-char start-marker)
-            (unless (or (bobp)
-                        (plist-get info :in-place))
-              (let* ((beg-block-p (gptel-extra--after-begin-block-p))
-                     (end-block-p (gptel-extra--before-end-block-p))
-                     (pos (point))
-                     (left-block-line (and beg-block-p
-                                           (let* ((count
-                                                   (save-excursion
-                                                     (goto-char
-                                                      beg-block-p)
-                                                     (forward-line 1)
-                                                     (count-lines pos
-                                                                  (point))))
-                                                  (diff (- 1 count)))
-                                             (when (> diff 0)
-                                               (make-string diff (string-to-char
-                                                                  "\n"))))))
-                     (end-block-line (and end-block-p
-                                          (let* ((count (save-excursion
-                                                          (goto-char end-block-p)
-                                                          (forward-line -1)
-                                                          (count-lines pos
-                                                                       (point))))
-                                                 (diff (- 1 count)))
-                                            (when (> diff 0)
-                                              (make-string diff (string-to-char
-                                                                 "\n"))))))
-                     (str (string-join (delq nil (list
-                                                  (or left-block-line "\n\n")
-                                                  (unless beg-block-p
-                                                    "#+begin_src markdown\n")
-                                                  end-block-line
-                                                  (unless end-block-p
-                                                    "\n#+end_src")))
-                                       "")))
-                (insert (apply #'propertize str
-                               '(gptel response rear-nonsticky t)))
-                (when (string-match-p str "#\\+end_src")
-                  (re-search-backward "#\\+end_src" nil t 1))
-                (forward-line -1)))
-            (setq tracking-marker (set-marker (make-marker) (point)))
-            (set-marker-insertion-type tracking-marker t)
-            (plist-put info :tracking-marker tracking-marker))
-          (add-text-properties
-           0 (length response) '(gptel response rear-nonsticky t)
-           response)
-          (goto-char tracking-marker)
-          (insert response))))))
+command.
+
+Optional RAW disables text properties and transformation."
+  (pcase response
+    ((pred stringp)
+     (let ((start-marker (plist-get info :position))
+           (tracking-marker (plist-get info :tracking-marker))
+           (transformer (plist-get info :transformer)))
+       (with-current-buffer (marker-buffer start-marker)
+         (save-excursion
+           (unless tracking-marker
+             (goto-char start-marker)
+             (unless (or (bobp)
+                         (plist-get info :in-place))
+               (when gptel-mode
+                 (let* ((beg-block-p (gptel-extra--after-begin-block-p))
+                        (end-block-p (gptel-extra--before-end-block-p))
+                        (pos (point))
+                        (left-block-line (and beg-block-p
+                                              (let* ((count
+                                                      (save-excursion
+                                                        (goto-char
+                                                         beg-block-p)
+                                                        (forward-line 1)
+                                                        (count-lines pos
+                                                                     (point))))
+                                                     (diff (- 1 count)))
+                                                (when (> diff 0)
+                                                  (make-string diff (string-to-char
+                                                                     "\n"))))))
+                        (end-block-line (and end-block-p
+                                             (let* ((count
+                                                     (save-excursion
+                                                       (goto-char
+                                                        end-block-p)
+                                                       (forward-line -1)
+                                                       (count-lines pos
+                                                                    (point))))
+                                                    (diff (- 1 count)))
+                                               (when (> diff 0)
+                                                 (make-string diff (string-to-char
+                                                                    "\n"))))))
+                        (str (string-join (delq nil (list
+                                                     (or left-block-line "\n\n")
+                                                     (unless beg-block-p
+                                                       "#+begin_src markdown\n")
+                                                     end-block-line
+                                                     (unless end-block-p
+                                                       "\n#+end_src")))
+                                          "")))
+                   (insert (apply #'propertize str
+                                  '(gptel response rear-nonsticky t)))
+                   (when (string-match-p str "#\\+end_src")
+                     (re-search-backward "#\\+end_src" nil t 1))
+                   (forward-line -1)))
+               (move-marker start-marker (point)))
+             (setq tracking-marker (set-marker (make-marker) (point)))
+             (set-marker-insertion-type tracking-marker t)
+             (plist-put info :tracking-marker tracking-marker))
+           (goto-char tracking-marker)
+           (unless raw
+             (when transformer
+               (setq response (funcall transformer response)))
+             (add-text-properties
+              0 (length response) '(gptel response front-sticky (gptel))
+              response))
+           (insert response)
+           (run-hooks 'gptel-post-stream-hook)))))
+    (`(reasoning . ,text)
+     (gptel--display-reasoning-stream text info))
+    (`(tool-call . ,tool-calls)
+     (gptel--display-tool-calls tool-calls info))
+    (`(tool-result . ,tool-results)
+     (gptel--display-tool-results tool-results info))))
 
 ;;;###autoload
 (define-minor-mode gptel-extra-org-markdown-block-mode
@@ -637,7 +657,7 @@ Argument FILE is a string representing the FILE path."
     (write-region content nil name nil nil)))
 
 ;;;###autoload
-(defun gptel-extract-saved ()
+(defun gptel-extra-extract-saved ()
   "Prompt user to select a file from saved GPT-EL states."
   (interactive)
   (when (file-exists-p gptel-extra-default-save-dir)
